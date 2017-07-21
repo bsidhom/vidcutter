@@ -29,6 +29,9 @@ import shlex
 import sys
 from distutils.spawn import find_executable
 from enum import Enum
+from typing import List
+
+import dateutil.parser
 
 from PyQt5.QtCore import pyqtSlot, QDir, QFile, QFileInfo, QObject, QProcess, QProcessEnvironment, QSize, QTemporaryFile
 from PyQt5.QtGui import QPixmap
@@ -115,14 +118,16 @@ class VideoService(QObject):
     #     isValid = False
     #     return isValid
 
-    def cut(self, source: str, output: str, frametime: str, duration: str, allstreams: bool=True) -> bool:
+    def cut(self, source: str, output: str, frametime: str, duration: str,
+            timestamp: str, allstreams: bool=True) -> bool:
+        args = ["-i", source, "-ss", frametime, "-t", duration, "-vcodec",
+                "copy", "-acodec", "copy"]
         if allstreams:
-            args = '-i "%s" -ss %s -t %s -vcodec copy -acodec copy -scodec copy -map 0 -v 16 -y "%s"' \
-                   % (source, frametime, duration, QDir.fromNativeSeparators(output))
-        else:
-            args = '-i "%s" -ss %s -t %s -vcodec copy -acodec copy -v 16 -y "%s"' \
-                   % (source, frametime, duration, QDir.fromNativeSeparators(output))
-        return self.cmdExec(self.backend, args)
+            args.extend(["-scodec", "copy", "-map", "0"])
+        if timestamp is not None:
+            args.extend(["-timestamp", timestamp])
+        args.extend(["-v", "16", "-y", QDir.fromNativeSeparators(output)])
+        return self.cmdExecSafe(self.backend, args)
 
     def join(self, filelist: str, output: str, allstreams: bool=True) -> bool:
         if allstreams:
@@ -181,6 +186,31 @@ class VideoService(QObject):
         args = '--output=%s "%s"' % (output, source)
         result = self.cmdExec(self.mediainfo, args, True)
         return result.strip()
+
+    def getCreateDate(self, source: str) -> str:
+        cmd = "ffprobe"
+        args = ["-v", "quiet", source, "-print_format", "csv", "-show_entries",
+                "format_tags=creation_time"]
+        cmd_result = self.cmdExecSafe(cmd, args, True).strip().split(sep=",",
+                maxsplit=1)
+        if len(cmd_result) != 2:
+            return None
+        date_str = cmd_result[1]
+        return dateutil.parser.parse(date_str)
+
+    def cmdExecSafe(self, cmd: str, args: List[str], output: bool=False):
+        if os.getenv('DEBUG', False):
+            self.logger.info('"%s %s"' % (cmd, args if args is not None else ''))
+        if self.proc.state() == QProcess.NotRunning:
+            self.proc.setProcessChannelMode(QProcess.SeparateChannels if cmd == self.mediainfo
+                                            else QProcess.MergedChannels)
+            self.proc.start(cmd, args)
+            self.proc.waitForFinished(-1)
+            if output:
+                return str(self.proc.readAllStandardOutput().data(), 'utf-8')
+            if self.proc.exitStatus() == QProcess.NormalExit and self.proc.exitCode() == 0:
+                return True
+        return False
 
     def cmdExec(self, cmd: str, args: str=None, output: bool=False):
         if os.getenv('DEBUG', False):

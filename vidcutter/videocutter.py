@@ -22,6 +22,7 @@
 #
 #######################################################################
 
+import datetime
 import logging
 import os
 import re
@@ -1072,6 +1073,18 @@ class VideoCutter(QWidget):
         else:
             return '%f' % (td.days * 86400 + td.seconds + td.microseconds / 1000000.)
 
+    @staticmethod
+    def getClipTimestamp(source_timestamp: datetime.datetime, clip_start_msec: int) -> str:
+        if source_timestamp is None:
+            return None
+        has_timezone = source_timestamp.tzinfo is not None and source_timestamp.tzinfo.utcoffset(source_timestamp) is not None
+        clip_timestamp = source_timestamp + timedelta(milliseconds=clip_start_msec)
+        if has_timezone:
+            clip_timestamp = clip_timestamp.astimezone(datetime.timezone.utc)
+            return clip_timestamp.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        else:
+            return clip_timestamp.strftime('%Y-%m-%dT%H:%M:%S.%f')
+
     def captureImage(self, frametime: QTime) -> QPixmap:
         return VideoService.capture(self.currentMedia, frametime.toString(self.timeformat))
 
@@ -1079,6 +1092,7 @@ class VideoCutter(QWidget):
         clips = len(self.clipTimes)
         filename, filelist = '', []
         source_file, source_ext = os.path.splitext(self.currentMedia)
+        source_timestamp = self.videoService.getCreateDate(source = self.currentMedia)
         if clips > 0:
             self.finalFilename, _ = QFileDialog.getSaveFileName(parent=self, caption='Save video',
                                                                 directory='%s_EDIT%s' % (source_file, source_ext),
@@ -1104,15 +1118,19 @@ class VideoCutter(QWidget):
                                              % ('{0:0>2}'.format(index + 1), '{0:0>2}'.format(clips)))
                 qApp.processEvents()
                 duration = self.delta2QTime(clip[0].msecsTo(clip[1])).toString(self.timeformat)
+                clip_msecs = QTime(0, 0, 0).msecsTo(clip[0])
+                clip_timestamp = self.getClipTimestamp(source_timestamp, clip_msecs)
                 filename = '%s_%s%s' % (file, '{0:0>2}'.format(index), ext)
                 filelist.append(filename)
                 self.videoService.cut(source='%s%s' % (source_file, source_ext), output=filename,
                                       frametime=clip[0].toString(self.timeformat), duration=duration,
+                                      timestamp=clip_timestamp,
                                       allstreams=True)
                 if QFile(filename).size() < 1000:
                     self.logger.info('cut resulted in 0 length file, trying again without all stream mapping')
                     self.videoService.cut(source='%s%s' % (source_file, source_ext), output=filename,
                                           frametime=clip[0].toString(self.timeformat), duration=duration,
+                                          timestamp=clip_timestamp,
                                           allstreams=False)
                 index += 1
             if len(filelist) > 1:
